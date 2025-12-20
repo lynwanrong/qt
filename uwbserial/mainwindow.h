@@ -43,6 +43,7 @@ protected:
 private:
     QMap<int, Point> m_anchors; // 基站 ID -> 坐标
     QMap<int, Tag> m_tags;      // 标签 ID -> 数据
+    QPixmap m_anchorImage;
 
     // 绘图变换参数
     double m_scale;

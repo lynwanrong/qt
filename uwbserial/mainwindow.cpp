@@ -37,6 +37,9 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), m_scale(1.0), m_offsetX
     pal.setColor(QPalette::Window, Qt::white);
     setAutoFillBackground(true);
     setPalette(pal);
+
+    // 加载基站图片
+    m_anchorImage.load(":/anchor.png");
 }
 
 void MapWidget::updateAnchors(const QVector<Point> &anchors)
@@ -120,12 +123,19 @@ void MapWidget::paintEvent(QPaintEvent *)
     for (auto it = m_anchors.begin(); it != m_anchors.end(); ++it) {
         QPointF sPos = worldToScreen(it.value().x, it.value().y);
 
-        painter.setBrush(Qt::black);
-        painter.setPen(Qt::NoPen);
-        painter.drawRect(QRectF(sPos.x() - 8, sPos.y() - 8, 16, 16));
+        if (!m_anchorImage.isNull()) {
+            int w = 32;
+            int h = 32;
+            QRect targetRect(sPos.x() - w/2, sPos.y() - h/2, w, h);
+            painter.drawPixmap(targetRect, m_anchorImage);
+        } else {
+            painter.setBrush(Qt::black);
+            painter.setPen(Qt::NoPen);
+            painter.drawRect(QRectF(sPos.x() - 8, sPos.y() - 8, 16, 16));
+        }
 
         painter.setPen(Qt::black);
-        painter.drawText(sPos + QPointF(10, 5), QString("A%1").arg(it.key()));
+        painter.drawText(sPos + QPointF(16, 5), QString("A%1").arg(it.key()));
     }
 
     // 绘制标签
