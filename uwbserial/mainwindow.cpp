@@ -19,6 +19,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QRegExp> // Qt5.4 使用 QRegExp 处理正则比较方便
+#include <QSet>
 
 // ==========================================
 // 调试宏定义
@@ -464,7 +466,8 @@ void MainWindow::onSerialReadyRead()
         m_serialBuffer.remove(0, lineEnd + 1);
 
         if (!line.isEmpty()) {
-            processJsonData(line);
+//            processJsonData(line);
+            processData(line);
         }
     }
 }
@@ -589,6 +592,196 @@ void MainWindow::processJsonData(const QByteArray &data)
             updateTagStatusDisplay();
         }
     }
+}
+
+// --------------------------------------------------------
+// 新的解析逻辑：处理 AT 指令格式
+// 示例格式: AT+RANGE=tid:1,mask:80,seq:65,range:(0,0,0,0,0,0,0,107),ancid:(-1,-1,-1,-1,-1,-1,-1,7)
+// --------------------------------------------------------
+void MainWindow::processData(const QByteArray &data)
+{
+    QString strData = QString::fromLatin1(data).trimmed();
+
+    // 1. 简单校验
+    if (!strData.startsWith("AT+RANGE=")) return;
+
+    // 2. 解析 tid
+    int tagId = -1;
+    // 使用 QRegExp (Qt5) 提取 tid: 后面的数字
+    QRegExp rxId("tid:(\\d+)");
+    if (rxId.indexIn(strData) != -1) {
+        tagId = rxId.cap(1).toInt();
+    } else {
+        return; // 解析不到 ID
+    }
+
+    // 3. 提取 range 和 ancid 内容
+    // 格式是 range:(1,2,3) 和 ancid:(1,2,3)
+    QVector<double> rawRanges;
+    QVector<int> aidArr;
+
+    // 解析 Range
+    QRegExp rxRange("range:\\(([^)]+)\\)");
+    if (rxRange.indexIn(strData) != -1) {
+        QString rangeContent = rxRange.cap(1);
+        QStringList parts = rangeContent.split(',');
+        for (const QString &val : parts) {
+            rawRanges.append(val.toDouble());
+        }
+    }
+
+    // 解析 Ancid (注意：这里在新的格式叫 ancid, 之前叫 aid)
+    QRegExp rxAncid("ancid:\\(([^)]+)\\)");
+    if (rxAncid.indexIn(strData) != -1) {
+        QString ancidContent = rxAncid.cap(1);
+        QStringList parts = ancidContent.split(',');
+        for (const QString &val : parts) {
+            aidArr.append(val.toInt());
+        }
+    }
+
+    // 如果没有数据或长度不匹配，退出
+    if (rawRanges.isEmpty() || aidArr.isEmpty()) return;
+
+    // ==========================================
+    // 以下逻辑复用之前的滤波和定位算法
+    // ==========================================
+
+    // 准备定位数据
+    struct RangeData { int aid; double dist; };
+    QVector<RangeData> currentRanges;
+
+    // === 滤波处理逻辑 ===
+    QVector<double> filteredRanges;
+    double threshold = m_spinThreshold->value();
+
+    if (!m_lastTagRanges.contains(tagId) || m_lastTagRanges[tagId].size() != rawRanges.size()) {
+        m_lastTagRanges[tagId] = rawRanges;
+        filteredRanges = rawRanges;
+    } else {
+        QVector<double> &lastRanges = m_lastTagRanges[tagId];
+        filteredRanges.resize(rawRanges.size());
+
+        for (int i = 0; i < rawRanges.size(); ++i) {
+            double newVal = rawRanges[i];
+            double oldVal = lastRanges[i];
+
+            // 滤波规则：如果在阈值内波动且不为0，保持旧值
+            if (newVal == 0) {
+                filteredRanges[i] = 0;
+            } else if (oldVal == 0) {
+                filteredRanges[i] = newVal;
+                lastRanges[i] = newVal;
+            } else if (qAbs(newVal - oldVal) <= threshold) {
+                filteredRanges[i] = oldVal;
+            } else {
+                filteredRanges[i] = newVal;
+                lastRanges[i] = newVal;
+            }
+        }
+    }
+
+    // === 组合数据：距离 > 0 则去查 aid 数组对应的 ID ===
+    int count = qMin(filteredRanges.size(), aidArr.size());
+    for(int i = 0; i < count; ++i) {
+        double dist = filteredRanges[i];
+        if (dist > 0) {
+            int aid = aidArr[i];
+            currentRanges.append({aid, dist});
+        }
+    }
+
+//    if (currentRanges.isEmpty()) return;
+
+    // === 匹配已知基站坐标 ===
+    QMap<int, MapWidget::Point> knownAnchors;
+    for (int i = 0; i < m_tableAnchors->rowCount(); ++i) {
+        if(auto idItem = m_tableAnchors->item(i, 0)) {
+            int id = idItem->text().toInt();
+            double x = m_tableAnchors->item(i, 1)->text().toDouble();
+            double y = m_tableAnchors->item(i, 2)->text().toDouble();
+            knownAnchors[id] = {x, y};
+        }
+    }
+
+    #ifdef DEBUG_ANCHORS
+    qDebug() << "------------------------------------------------";
+    qDebug() << "Parsed Data -> Tag:" << tagId;
+    qDebug() << "Raw Ranges:" << rawRanges;
+    qDebug() << "Anc IDs:" << aidArr;
+
+    QString validStr;
+    for(auto r : currentRanges) validStr += QString("[%1: %2cm] ").arg(r.aid).arg(r.dist);
+    qDebug() << "Valid Pairs (Dist>0):" << validStr;
+
+    QString knownStr;
+    for(auto k : knownAnchors.keys()) knownStr += QString("%1 ").arg(k);
+    qDebug() << "Configured Anchors in UI:" << knownStr;
+    #endif
+
+//    if (currentRanges.isEmpty()) return;
+
+    QVector<MapWidget::Point> validPoints;
+    QVector<double> validDistances;
+//    QVector<int> debugIDs;
+    QSet<int> usedIDs;
+
+    for(auto r : currentRanges) {
+        if(knownAnchors.contains(r.aid)) {
+            validPoints.append(knownAnchors[r.aid]);
+            validDistances.append(r.dist);
+//            debugIDs.append(r.aid);
+            if (usedIDs.size() < 3) {
+                usedIDs.insert(r.aid);
+            }
+        }
+    }
+
+    // === 调试宏打印 ===
+//    #ifdef DEBUG_ANCHORS
+//    if (!validPoints.isEmpty()) {
+//         qDebug() << "=== Tag" << tagId << "Calculation Frame ===";
+//         for(int i=0; i<validPoints.size(); ++i) {
+//             qDebug() << "Anchor ID:" << debugIDs[i]
+//                      << " Pos:(" << validPoints[i].x << "," << validPoints[i].y << ")"
+//                      << " Dist:" << validDistances[i];
+//         }
+//    }
+//    #endif
+
+    // === 刷新表格 UI：高亮参与计算的基站ID ===
+    // 遍历表格的所有行，如果 ID 在 usedIDs 中，则设为红色
+    for(int i = 0; i < m_tableAnchors->rowCount(); ++i) {
+        QTableWidgetItem *item = m_tableAnchors->item(i, 0); // 第0列是 ID 列
+        if(!item) continue;
+
+        int id = item->text().toInt();
+        if(usedIDs.contains(id)) {
+            // 设置红色背景，白色文字，表示该基站“中选”
+            item->setBackground(Qt::red);
+            item->setForeground(Qt::white);
+        } else {
+            // 恢复默认背景 (使用 QBrush() 恢复默认，保留 setAlternatingRowColors 的效果)
+            item->setBackground(QBrush());
+            item->setForeground(Qt::black);
+        }
+    }
+
+    if (currentRanges.isEmpty() || validPoints.isEmpty()) return;
+
+    // 计算位置
+    QPointF pos;
+    QString statusStr;
+
+    if (calculatePosition(validPoints, validDistances, pos)) {
+        m_mapWidget->updateTag(tagId, pos.x(), pos.y());
+        statusStr = QString("Tag %1: (%2, %3) [Anchors:%4]").arg(tagId).arg(pos.x(), 0, 'f', 1).arg(pos.y(), 0, 'f', 1).arg(validPoints.size());
+    } else {
+        statusStr = QString("Tag %1: Positioning Failed (Valid Anchors<3)").arg(tagId);
+    }
+
+    m_tagInfoMap[tagId] = statusStr;
+    updateTagStatusDisplay();
 }
 
 void MainWindow::updateTagStatusDisplay()

@@ -97,6 +97,7 @@ private:
 
     // 核心算法
     void processJsonData(const QByteArray &data);
+    void processData(const QByteArray &data);
     bool calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<double> &ranges, QPointF &result);
 
     // 成员变量
