@@ -333,6 +333,7 @@ void MainWindow::parseLine(const QString &line)
         QString params = line.section('=', 1);
         QStringList parts = params.split(',');
         if (parts.size() >= 4) {
+            // --- 更新左侧状态看板 ---
             dispDevId->setText(parts[0]);
 
             int role = parts[1].toInt();
@@ -343,34 +344,73 @@ void MainWindow::parseLine(const QString &line)
 
             int filter = parts[3].toInt();
             dispFilter->setText(filter == 1 ? "Enabled" : "Disabled");
+
+            // --- [新增] 同步更新右侧配置面板 ---
+            inputDevId->setText(parts[0]); // 同步 ID
+
+            // 同步角色 (查找数据对应的索引)
+            int roleIdx = inputRole->findData(role);
+            if (roleIdx != -1) inputRole->setCurrentIndex(roleIdx);
+
+            // 同步速率 (查找数据对应的索引)
+            int rateIdx = inputRate->findData(rate);
+            if (rateIdx != -1) inputRate->setCurrentIndex(rateIdx);
+
+            // 同步过滤开关
+            inputFilter->setChecked(filter == 1);
         }
     }
     // 3. PAN: AT+GETPAN=1234
     else if (line.contains("GETPAN=") || (line.contains("PAN=") && !line.contains("SETPAN"))) {
-        dispPanId->setText(line.section('=', 1).trimmed());
+        QString val = line.section('=', 1).trimmed();
+        dispPanId->setText(val);
+
+        // --- [新增] 同步右侧 ---
+        inputPanId->setText(val);
     }
     // 4. 天线: AT+GETANT=16536
     else if (line.contains("GETANT=")) {
-        dispAntDelay->setText(line.section('=', 1).trimmed());
+        QString val = line.section('=', 1).trimmed();
+        dispAntDelay->setText(val);
+
+        // --- [新增] 同步右侧 ---
+        inputAntDelay->setText(val);
     }
     // 5. 功率: AT+GETPOW=FD
     else if (line.contains("GETPOW=")) {
-        dispPower->setText(line.section('=', 1).trimmed());
+        QString val = line.section('=', 1).trimmed();
+        dispPower->setText(val);
+
+        // --- [新增] 同步右侧 ---
+        inputPower->setText(val);
     }
     // 6. 容量: AT+GETCAP=10,10,1
     else if (line.contains("GETCAP=")) {
         QString params = line.section('=', 1);
         QStringList parts = params.split(',');
         if (parts.size() >= 3) {
-            QString mode = (parts[2].toInt() == 1) ? "Ext" : "Std";
+            // --- 更新左侧状态看板 ---
+            int modeVal = parts[2].toInt();
+            QString modeStr = (modeVal == 1) ? "Ext" : "Std";
             dispCapacity->setText(QString("Tag:%1 | Slot:%2ms | %3")
-                                      .arg(parts[0], parts[1], mode));
+                                      .arg(parts[0], parts[1], modeStr));
+
+            // --- [新增] 同步右侧配置面板 ---
+            inputTagCount->setText(parts[0]); // 同步标签数量
+            inputSlotTime->setText(parts[1]); // 同步时隙
+
+            // 同步模式 (标准/扩展)
+            int modeIdx = inputExtMode->findData(modeVal);
+            if (modeIdx != -1) inputExtMode->setCurrentIndex(modeIdx);
         }
     }
     // 7. 上报: AT+GETRPT=1
     else if (line.contains("GETRPT=")) {
         int val = line.section('=', 1).toInt();
         dispRptStatus->setText(val == 1 ? "Enabled" : "Disabled");
+
+        // --- [新增] 同步右侧 ---
+        inputAutoRpt->setChecked(val == 1);
     }
 }
 

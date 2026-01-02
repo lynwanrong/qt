@@ -55,7 +55,7 @@ void MapWidget::updateAnchorsMap(const QMap<int, Point> &anchorsMap)
     update();
 }
 
-void MapWidget::updateTag(int id, double x, double y)
+void MapWidget::updateTag(int id, int x, int y)
 {
     Tag tag;
     tag.pos.x = x;
@@ -156,15 +156,15 @@ void MapWidget::paintEvent(QPaintEvent *)
 
 void MapWidget::drawGrid(QPainter &painter)
 {
-    QPen pen(QColor(220, 220, 220));
-    pen.setStyle(Qt::DashLine);
-    painter.setPen(pen);
+    // QPen pen(QColor(220, 220, 220));
+    // pen.setStyle(Qt::DashLine);
+    // painter.setPen(pen);
 
-    int step = 50;
-    for (int x = 0; x < width(); x += step)
-        painter.drawLine(x, 0, x, height());
-    for (int y = 0; y < height(); y += step)
-        painter.drawLine(0, y, width(), y);
+    // int step = 50;
+    // for (int x = 0; x < width(); x += step)
+    //     painter.drawLine(x, 0, x, height());
+    // for (int y = 0; y < height(); y += step)
+    //     painter.drawLine(0, y, width(), y);
 
     QPen originPen(QColor(200, 200, 200), 2);
     painter.setPen(originPen);
@@ -446,8 +446,8 @@ void MainWindow::applyAnchors()
 
         if (itemID && itemX && itemY) {
             int id = itemID->text().toInt();
-            double x = itemX->text().toDouble();
-            double y = itemY->text().toDouble();
+            int x = itemX->text().toInt();
+            int y = itemY->text().toInt();
             anchorsMap[id] = {x, y};
         }
     }
@@ -474,6 +474,7 @@ void MainWindow::onSerialReadyRead()
 
 void MainWindow::processJsonData(const QByteArray &data)
 {
+#if 0
     QJsonParseError error;
     QJsonDocument doc = QJsonDocument::fromJson(data, &error);
 
@@ -592,6 +593,7 @@ void MainWindow::processJsonData(const QByteArray &data)
             updateTagStatusDisplay();
         }
     }
+#endif
 }
 
 // --------------------------------------------------------
@@ -602,104 +604,55 @@ void MainWindow::processData(const QByteArray &data)
 {
     QString strData = QString::fromLatin1(data).trimmed();
 
-    // 1. 简单校验
     if (!strData.startsWith("AT+RANGE=")) return;
 
-    // 2. 解析 tid
+    // 解析 tid
     int tagId = -1;
-    // 使用 QRegExp (Qt5) 提取 tid: 后面的数字
     QRegExp rxId("tid:(\\d+)");
     if (rxId.indexIn(strData) != -1) {
         tagId = rxId.cap(1).toInt();
     } else {
-        return; // 解析不到 ID
+        return;
     }
 
-    // 3. 提取 range 和 ancid 内容
-    // 格式是 range:(1,2,3) 和 ancid:(1,2,3)
-    QVector<double> rawRanges;
+    // 解析 range 和 ancid
+    QVector<int> rawRanges;
     QVector<int> aidArr;
 
-    // 解析 Range
     QRegExp rxRange("range:\\(([^)]+)\\)");
     if (rxRange.indexIn(strData) != -1) {
         QString rangeContent = rxRange.cap(1);
         QStringList parts = rangeContent.split(',');
-        for (const QString &val : parts) {
-            rawRanges.append(val.toDouble());
-        }
+        for (const QString &val : parts)
+            if (val.toInt()) rawRanges.append(val.toInt());
     }
 
-    // 解析 Ancid (注意：这里在新的格式叫 ancid, 之前叫 aid)
     QRegExp rxAncid("ancid:\\(([^)]+)\\)");
     if (rxAncid.indexIn(strData) != -1) {
         QString ancidContent = rxAncid.cap(1);
         QStringList parts = ancidContent.split(',');
-        for (const QString &val : parts) {
-            aidArr.append(val.toInt());
-        }
+        for (const QString &val : parts)
+            if (val.toInt() + 1) aidArr.append(val.toInt());
     }
 
     // 如果没有数据或长度不匹配，退出
-    if (rawRanges.isEmpty() || aidArr.isEmpty()) return;
-
-    // ==========================================
-    // 以下逻辑复用之前的滤波和定位算法
-    // ==========================================
-
-    // 准备定位数据
-    struct RangeData { int aid; double dist; };
-    QVector<RangeData> currentRanges;
-
-    // === 滤波处理逻辑 ===
-    QVector<double> filteredRanges;
-    double threshold = m_spinThreshold->value();
-
-    if (!m_lastTagRanges.contains(tagId) || m_lastTagRanges[tagId].size() != rawRanges.size()) {
-        m_lastTagRanges[tagId] = rawRanges;
-        filteredRanges = rawRanges;
-    } else {
-        QVector<double> &lastRanges = m_lastTagRanges[tagId];
-        filteredRanges.resize(rawRanges.size());
-
-        for (int i = 0; i < rawRanges.size(); ++i) {
-            double newVal = rawRanges[i];
-            double oldVal = lastRanges[i];
-
-            // 滤波规则：如果在阈值内波动且不为0，保持旧值
-            if (newVal == 0) {
-                filteredRanges[i] = 0;
-            } else if (oldVal == 0) {
-                filteredRanges[i] = newVal;
-                lastRanges[i] = newVal;
-            } else if (qAbs(newVal - oldVal) <= threshold) {
-                filteredRanges[i] = oldVal;
-            } else {
-                filteredRanges[i] = newVal;
-                lastRanges[i] = newVal;
-            }
-        }
+    if ((aidArr.length() != rawRanges.size()) || (aidArr.size() < 3)) {
+        qDebug() << "value data < 3";
+        return;
     }
 
-    // === 组合数据：距离 > 0 则去查 aid 数组对应的 ID ===
-    int count = qMin(filteredRanges.size(), aidArr.size());
-    for(int i = 0; i < count; ++i) {
-        double dist = filteredRanges[i];
-        if (dist > 0) {
-            int aid = aidArr[i];
-            currentRanges.append({aid, dist});
-        }
-    }
 
-//    if (currentRanges.isEmpty()) return;
+    // ==========================================
+    // 滤波和定位算法
+    // ==========================================
 
     // === 匹配已知基站坐标 ===
     QMap<int, MapWidget::Point> knownAnchors;
     for (int i = 0; i < m_tableAnchors->rowCount(); ++i) {
         if(auto idItem = m_tableAnchors->item(i, 0)) {
             int id = idItem->text().toInt();
-            double x = m_tableAnchors->item(i, 1)->text().toDouble();
-            double y = m_tableAnchors->item(i, 2)->text().toDouble();
+            int x = m_tableAnchors->item(i, 1)->text().toInt();
+            int y = m_tableAnchors->item(i, 2)->text().toInt();
             knownAnchors[id] = {x, y};
         }
     }
@@ -719,63 +672,30 @@ void MainWindow::processData(const QByteArray &data)
     qDebug() << "Configured Anchors in UI:" << knownStr;
     #endif
 
-//    if (currentRanges.isEmpty()) return;
-
     QVector<MapWidget::Point> validPoints;
-    QVector<double> validDistances;
-//    QVector<int> debugIDs;
-    QSet<int> usedIDs;
+    QVector<int> validDistances;
 
-    for(auto r : currentRanges) {
-        if(knownAnchors.contains(r.aid)) {
-            validPoints.append(knownAnchors[r.aid]);
-            validDistances.append(r.dist);
-//            debugIDs.append(r.aid);
-            if (usedIDs.size() < 3) {
-                usedIDs.insert(r.aid);
-            }
+    for (int i = 0; i < aidArr.size(); i++) {
+        if (knownAnchors.contains(aidArr.at(i))) {
+            validPoints.append(knownAnchors[aidArr.at(i)]);
+            validDistances.append(rawRanges.at(i));
         }
     }
 
-    // === 调试宏打印 ===
-//    #ifdef DEBUG_ANCHORS
-//    if (!validPoints.isEmpty()) {
-//         qDebug() << "=== Tag" << tagId << "Calculation Frame ===";
-//         for(int i=0; i<validPoints.size(); ++i) {
-//             qDebug() << "Anchor ID:" << debugIDs[i]
-//                      << " Pos:(" << validPoints[i].x << "," << validPoints[i].y << ")"
-//                      << " Dist:" << validDistances[i];
-//         }
-//    }
-//    #endif
-
-    // === 刷新表格 UI：高亮参与计算的基站ID ===
-    // 遍历表格的所有行，如果 ID 在 usedIDs 中，则设为红色
-    for(int i = 0; i < m_tableAnchors->rowCount(); ++i) {
-        QTableWidgetItem *item = m_tableAnchors->item(i, 0); // 第0列是 ID 列
-        if(!item) continue;
-
-        int id = item->text().toInt();
-        if(usedIDs.contains(id)) {
-            // 设置红色背景，白色文字，表示该基站“中选”
-            item->setBackground(Qt::red);
-            item->setForeground(Qt::white);
-        } else {
-            // 恢复默认背景 (使用 QBrush() 恢复默认，保留 setAlternatingRowColors 的效果)
-            item->setBackground(QBrush());
-            item->setForeground(Qt::black);
-        }
-    }
-
-    if (currentRanges.isEmpty() || validPoints.isEmpty()) return;
+    if (validPoints.isEmpty()) return;
 
     // 计算位置
-    QPointF pos;
+    QPoint pos;
     QString statusStr;
 
     if (calculatePosition(validPoints, validDistances, pos)) {
-        m_mapWidget->updateTag(tagId, pos.x(), pos.y());
-        statusStr = QString("Tag %1: (%2, %3) [Anchors:%4]").arg(tagId).arg(pos.x(), 0, 'f', 1).arg(pos.y(), 0, 'f', 1).arg(validPoints.size());
+        if (m_lastTagPoint.contains(tagId)) {
+            int threshold = m_spinThreshold->value();
+            if (qAbs(pos.x() - m_lastTagPoint[tagId].x()) > threshold || qAbs(pos.y() - m_lastTagPoint[tagId].y()) > threshold)
+                m_mapWidget->updateTag(tagId, pos.x(), pos.y());
+        } else {
+            m_lastTagPoint[tagId] = pos;
+        }
     } else {
         statusStr = QString("Tag %1: Positioning Failed (Valid Anchors<3)").arg(tagId);
     }
@@ -801,12 +721,12 @@ void MainWindow::onSerialError(QSerialPort::SerialPortError error)
     }
 }
 
-bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<double> &ranges, QPointF &result)
+bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result)
 {
     int n = qMin(anchors.size(), ranges.size());
     if (n < 3) return false;
 
-    struct ValidData { double x, y, r; };
+    struct ValidData { int x, y, r; };
     QVector<ValidData> data;
     for(int i=0; i<n; ++i) {
         if(ranges[i] > 0) data.append({anchors[i].x, anchors[i].y, ranges[i]});
@@ -814,25 +734,25 @@ bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, con
 
     if(data.size() < 3) return false;
 
-    double x1 = data[0].x, y1 = data[0].y, r1 = data[0].r;
-    double x2 = data[1].x, y2 = data[1].y, r2 = data[1].r;
-    double x3 = data[2].x, y3 = data[2].y, r3 = data[2].r;
+    int x1 = data[0].x, y1 = data[0].y, r1 = data[0].r;
+    int x2 = data[1].x, y2 = data[1].y, r2 = data[1].r;
+    int x3 = data[2].x, y3 = data[2].y, r3 = data[2].r;
 
-    double A = 2 * (x2 - x1);
-    double B = 2 * (y2 - y1);
-    double C = r1*r1 - r2*r2 - x1*x1 + x2*x2 - y1*y1 + y2*y2;
+    int A = 2 * (x2 - x1);
+    int B = 2 * (y2 - y1);
+    int C = r1*r1 - r2*r2 - x1*x1 + x2*x2 - y1*y1 + y2*y2;
 
-    double D = 2 * (x3 - x2);
-    double E = 2 * (y3 - y2);
-    double F = r2*r2 - r3*r3 - x2*x2 + x3*x3 - y2*y2 + y3*y3;
+    int D = 2 * (x3 - x2);
+    int E = 2 * (y3 - y2);
+    int F = r2*r2 - r3*r3 - x2*x2 + x3*x3 - y2*y2 + y3*y3;
 
-    double det = A * E - B * D;
+    int det = A * E - B * D;
 
     if (qAbs(det) < 1e-6) return false;
 
-    double x = (C * E - B * F) / det;
-    double y = (A * F - C * D) / det;
+    int x = (C * E - B * F) / det;
+    int y = (A * F - C * D) / det;
 
-    result = QPointF(x, y);
+    result = QPoint(x, y);
     return true;
 }

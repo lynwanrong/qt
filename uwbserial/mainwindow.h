@@ -22,8 +22,8 @@ public:
     explicit MapWidget(QWidget *parent = nullptr);
 
     struct Point {
-        double x;
-        double y;
+        int x;
+        int y;
     };
 
     struct Tag {
@@ -34,7 +34,7 @@ public:
     // 更新基站坐标
     void updateAnchors(const QVector<Point> &anchors);
     // 更新标签位置
-    void updateTag(int id, double x, double y);
+    void updateTag(int id, int x, int y);
     void updateAnchorsMap(const QMap<int, Point> &anchorsMap);
 
 protected:
@@ -98,7 +98,7 @@ private:
     // 核心算法
     void processJsonData(const QByteArray &data);
     void processData(const QByteArray &data);
-    bool calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<double> &ranges, QPointF &result);
+    bool calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result);
 
     // 成员变量
     MapWidget *m_mapWidget;
@@ -118,7 +118,8 @@ private:
     QSettings *m_settings;
 
     // 存储每个 Tag 上一次的测距数据 {tag_id: [r0, r1, r2, ...]}
-    QMap<int, QVector<double>> m_lastTagRanges;
+    QMap<int, QVector<int>> m_lastTagRanges;
+    QMap<int, QPoint> m_lastTagPoint;
 
     // 新增：存储每个 Tag 的状态文本 {tag_id: "Tag 1: (100, 200)"}
     QMap<int, QString> m_tagInfoMap;
