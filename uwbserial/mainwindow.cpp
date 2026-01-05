@@ -21,6 +21,8 @@
 #include <QFileInfo>
 #include <QRegExp> // Qt5.4 使用 QRegExp 处理正则比较方便
 #include <QSet>
+#include <algorithm> // 用于 std::sort 或 std::swap
+#include <QScrollBar>
 
 // ==========================================
 // 调试宏定义
@@ -53,6 +55,11 @@ void MapWidget::updateAnchorsMap(const QMap<int, Point> &anchorsMap)
 {
     m_anchors = anchorsMap;
     update();
+}
+
+QMap<int, MapWidget::Point> MapWidget::getAnchorsMap() const
+{
+    return m_anchors;
 }
 
 void MapWidget::updateTag(int id, int x, int y)
@@ -126,8 +133,8 @@ void MapWidget::paintEvent(QPaintEvent *)
         QPointF sPos = worldToScreen(it.value().x, it.value().y);
 
         if (!m_anchorImage.isNull()) {
-            int w = 32;
-            int h = 32;
+            int w = 16;
+            int h = 16;
             QRect targetRect(sPos.x() - w/2, sPos.y() - h/2, w, h);
             painter.drawPixmap(targetRect, m_anchorImage);
         } else {
@@ -288,24 +295,29 @@ void MainWindow::initUI()
     vboxAlgo->addLayout(hboxThreshold);
     gbAlgorithm->setLayout(vboxAlgo);
 
-    // 4. 状态
-    QGroupBox *gbStatus = new QGroupBox("Status", this);
-    QVBoxLayout *vboxStatus = new QVBoxLayout(gbStatus);
+    // 4. 日志区域 (Log Output) - 替换了旧的显示区域
+    QGroupBox *gbLog = new QGroupBox("System Log", this);
+    QVBoxLayout *vboxLog = new QVBoxLayout(gbLog);
 
     m_lblConnection = new QLabel("Ready", this);
-    m_lblConnection->setStyleSheet("font-weight: bold; color: #333;");
-    vboxStatus->addWidget(m_lblConnection);
+    m_lblConnection->setAlignment(Qt::AlignCenter);
+    m_lblConnection->setStyleSheet("background-color: #eee; padding: 5px; border-radius: 4px;");
+    vboxLog->addWidget(m_lblConnection);
 
-    m_txtTagInfo = new QTextEdit(this);
-    m_txtTagInfo->setReadOnly(true);
-    vboxStatus->addWidget(m_txtTagInfo);
+    m_txtLog = new QTextEdit(this);
+    m_txtLog->setReadOnly(true);
+    // 设置等宽字体，看起来更像终端日志
+    QFont logFont("Consolas");
+    logFont.setStyleHint(QFont::Monospace);
+    m_txtLog->setFont(logFont);
+    vboxLog->addWidget(m_txtLog);
 
-    gbStatus->setLayout(vboxStatus);
+    gbLog->setLayout(vboxLog);
 
     controlLayout->addWidget(gbSerial);
     controlLayout->addWidget(gbAnchors);
     controlLayout->addWidget(gbAlgorithm);
-    controlLayout->addWidget(gbStatus);
+    controlLayout->addWidget(gbLog, 1); // Log 区域占据剩余空间
 
     mainLayout->addWidget(m_mapWidget, 1);
     mainLayout->addWidget(controlPanel);
@@ -352,11 +364,8 @@ void MainWindow::toggleConnection()
         m_btnConnect->setText("Connect");
         m_comboPorts->setEnabled(true);
         m_lblConnection->setText("Disconnected");
-        m_lblConnection->setStyleSheet("color: red; font-weight: bold;");
-
-        m_lastTagRanges.clear();
-        m_tagInfoMap.clear();
-        m_txtTagInfo->clear();
+        m_lblConnection->setStyleSheet("background-color: #fdd; color: red; padding: 5px; border-radius: 4px;");
+        logMessage("System: Port closed.");
     } else {
         QString portName = m_comboPorts->currentText();
         if (portName.isEmpty()) return;
@@ -365,20 +374,36 @@ void MainWindow::toggleConnection()
         m_serial->setBaudRate(115200);
 
         if (m_serial->open(QIODevice::ReadWrite)) {
-            m_btnConnect->setText("Disconnected");
+            m_btnConnect->setText("Disconnect");
             m_comboPorts->setEnabled(false);
             m_lblConnection->setText("Connected: " + portName);
-            m_lblConnection->setStyleSheet("color: green; font-weight: bold;");
+            m_lblConnection->setStyleSheet("background-color: #dfd; color: green; padding: 5px; border-radius: 4px;");
 
             m_serial->write("begin");
             m_serialBuffer.clear();
-            m_lastTagRanges.clear();
-            m_tagInfoMap.clear();
-            m_txtTagInfo->clear();
+            m_txtLog->clear();
+            logMessage("System: Port opened successfully.");
         } else {
             QMessageBox::critical(this, "Error", "Cannot open serial port: " + m_serial->errorString());
             m_btnConnect->setChecked(false);
         }
+    }
+}
+
+
+void MainWindow::logMessage(const QString &msg)
+{
+    QString timeStr = QDateTime::currentDateTime().toString("[HH:mm:ss.zzz] ");
+    m_txtLog->append(timeStr + msg);
+
+    // 自动滚动到底部
+    QScrollBar *sb = m_txtLog->verticalScrollBar();
+    sb->setValue(sb->maximum());
+
+    // 限制行数防止内存无限增长
+    if (m_txtLog->document()->blockCount() > 500) {
+        m_txtLog->clear();
+        m_txtLog->append("[System] Log cleared (buffer full)");
     }
 }
 
@@ -466,134 +491,9 @@ void MainWindow::onSerialReadyRead()
         m_serialBuffer.remove(0, lineEnd + 1);
 
         if (!line.isEmpty()) {
-//            processJsonData(line);
             processData(line);
         }
     }
-}
-
-void MainWindow::processJsonData(const QByteArray &data)
-{
-#if 0
-    QJsonParseError error;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &error);
-
-    if (error.error != QJsonParseError::NoError) return;
-
-    if (doc.isObject()) {
-        QJsonObject obj = doc.object();
-
-        if (obj.contains("id")) {
-            int tagId = obj["id"].toInt();
-
-            // 准备定位数据
-            struct RangeData { int aid; double dist; };
-            QVector<RangeData> currentRanges;
-
-            // === 修改：解析双数组格式 {"id":1,"range":[...],"aid":[...]} ===
-            if (obj.contains("range") && obj.contains("aid")) {
-                QJsonArray rangeArr = obj["range"].toArray();
-                QJsonArray aidArr = obj["aid"].toArray();
-
-                // 将原始range读入用于滤波
-                QVector<double> rawRanges;
-                for(auto v : rangeArr) rawRanges.append(v.toDouble());
-
-                // === 滤波处理逻辑 (基于索引位置) ===
-                QVector<double> filteredRanges;
-                double threshold = m_spinThreshold->value();
-
-                if (!m_lastTagRanges.contains(tagId) || m_lastTagRanges[tagId].size() != rawRanges.size()) {
-                    m_lastTagRanges[tagId] = rawRanges;
-                    filteredRanges = rawRanges;
-                } else {
-                    QVector<double> &lastRanges = m_lastTagRanges[tagId];
-                    filteredRanges.resize(rawRanges.size());
-
-                    for (int i = 0; i < rawRanges.size(); ++i) {
-                        double newVal = rawRanges[i];
-                        double oldVal = lastRanges[i];
-
-                        // 滤波规则：如果在阈值内波动且不为0，保持旧值
-                        if (newVal == 0) {
-                            filteredRanges[i] = 0;
-                        } else if (oldVal == 0) {
-                            filteredRanges[i] = newVal;
-                            lastRanges[i] = newVal;
-                        } else if (qAbs(newVal - oldVal) <= threshold) {
-                            filteredRanges[i] = oldVal;
-                        } else {
-                            filteredRanges[i] = newVal;
-                            lastRanges[i] = newVal;
-                        }
-                    }
-                }
-
-                // === 组合数据：距离 > 0 则去查 aid 数组对应的 ID ===
-                int count = qMin(filteredRanges.size(), aidArr.size());
-                for(int i = 0; i < count; ++i) {
-                    double dist = filteredRanges[i];
-                    if (dist > 0) {
-                        int aid = aidArr[i].toInt();
-                        currentRanges.append({aid, dist});
-                    }
-                }
-            }
-
-            if (currentRanges.isEmpty()) return;
-
-            // === 匹配已知基站坐标 ===
-            // 从 UI 表格临时获取坐标 (或者如果 MapWidget 有接口更好)
-            QMap<int, MapWidget::Point> knownAnchors;
-            for (int i = 0; i < m_tableAnchors->rowCount(); ++i) {
-                if(auto idItem = m_tableAnchors->item(i, 0)) {
-                    int id = idItem->text().toInt();
-                    double x = m_tableAnchors->item(i, 1)->text().toDouble();
-                    double y = m_tableAnchors->item(i, 2)->text().toDouble();
-                    knownAnchors[id] = {x, y};
-                }
-            }
-
-            QVector<MapWidget::Point> validPoints;
-            QVector<double> validDistances;
-            QVector<int> debugIDs; // 用于调试打印的ID列表
-
-            for(auto r : currentRanges) {
-                if(knownAnchors.contains(r.aid)) {
-                    validPoints.append(knownAnchors[r.aid]);
-                    validDistances.append(r.dist);
-                    debugIDs.append(r.aid);
-                }
-            }
-
-            // === 调试宏打印 ===
-            #ifdef DEBUG_ANCHORS
-            if (!validPoints.isEmpty()) {
-                 qDebug() << "=== Tag" << tagId << "Calculation Frame ===";
-                 for(int i=0; i<validPoints.size(); ++i) {
-                     qDebug() << "Anchor ID:" << debugIDs[i]
-                              << " Pos:(" << validPoints[i].x << "," << validPoints[i].y << ")"
-                              << " Dist:" << validDistances[i];
-                 }
-            }
-            #endif
-
-            // 计算位置
-            QPointF pos;
-            QString statusStr;
-
-            if (calculatePosition(validPoints, validDistances, pos)) {
-                m_mapWidget->updateTag(tagId, pos.x(), pos.y());
-                statusStr = QString("Tag %1: (%2, %3) [Anchors:%4]").arg(tagId).arg(pos.x(), 0, 'f', 1).arg(pos.y(), 0, 'f', 1).arg(validPoints.size());
-            } else {
-                statusStr = QString("Tag %1: Positioning Failed (Valid Anchors<3)").arg(tagId);
-            }
-
-            m_tagInfoMap[tagId] = statusStr;
-            updateTagStatusDisplay();
-        }
-    }
-#endif
 }
 
 // --------------------------------------------------------
@@ -603,7 +503,7 @@ void MainWindow::processJsonData(const QByteArray &data)
 void MainWindow::processData(const QByteArray &data)
 {
     QString strData = QString::fromLatin1(data).trimmed();
-
+//    qDebug() << strData;
     if (!strData.startsWith("AT+RANGE=")) return;
 
     // 解析 tid
@@ -636,26 +536,11 @@ void MainWindow::processData(const QByteArray &data)
     }
 
     // 如果没有数据或长度不匹配，退出
-    if ((aidArr.length() != rawRanges.size()) || (aidArr.size() < 3)) {
+    if ((aidArr.size() != rawRanges.size()) || (aidArr.size() < 3)) {
         qDebug() << "value data < 3";
         return;
     }
 
-
-    // ==========================================
-    // 滤波和定位算法
-    // ==========================================
-
-    // === 匹配已知基站坐标 ===
-    QMap<int, MapWidget::Point> knownAnchors;
-    for (int i = 0; i < m_tableAnchors->rowCount(); ++i) {
-        if(auto idItem = m_tableAnchors->item(i, 0)) {
-            int id = idItem->text().toInt();
-            int x = m_tableAnchors->item(i, 1)->text().toInt();
-            int y = m_tableAnchors->item(i, 2)->text().toInt();
-            knownAnchors[id] = {x, y};
-        }
-    }
 
     #ifdef DEBUG_ANCHORS
     qDebug() << "------------------------------------------------";
@@ -672,46 +557,54 @@ void MainWindow::processData(const QByteArray &data)
     qDebug() << "Configured Anchors in UI:" << knownStr;
     #endif
 
+    // 匹配有效基站
+    QMap<int, MapWidget::Point> mapAnchors = m_mapWidget->getAnchorsMap();
     QVector<MapWidget::Point> validPoints;
-    QVector<int> validDistances;
+    QVector<int> validRanges;
+    QString usedAnchorsStr;
 
     for (int i = 0; i < aidArr.size(); i++) {
-        if (knownAnchors.contains(aidArr.at(i))) {
-            validPoints.append(knownAnchors[aidArr.at(i)]);
-            validDistances.append(rawRanges.at(i));
+        int aid = aidArr[i];
+        if (mapAnchors.contains(aid)) {
+            validPoints.append(mapAnchors[aid]);
+            validRanges.append(rawRanges[i]);
+            usedAnchorsStr += QString("A%1:%2 ").arg(aid).arg(rawRanges[i]);
         }
     }
 
-    if (validPoints.isEmpty()) return;
+    if (validPoints.size() < 3) {
+        logMessage(QString("Tag %1: Not enough known anchors (%2 found)").arg(tagId).arg(validPoints.size()));
+        return;
+    }
 
-    // 计算位置
-    QPoint pos;
-    QString statusStr;
+    QPoint rawPos;
+    if (calculatePosition(validPoints, validRanges, rawPos)) {
 
-    if (calculatePosition(validPoints, validDistances, pos)) {
+        // 简单的平滑滤波
+        QPoint finalPos = rawPos;
         if (m_lastTagPoint.contains(tagId)) {
-            int threshold = m_spinThreshold->value();
-            if (qAbs(pos.x() - m_lastTagPoint[tagId].x()) > threshold || qAbs(pos.y() - m_lastTagPoint[tagId].y()) > threshold)
-                m_mapWidget->updateTag(tagId, pos.x(), pos.y());
-        } else {
-            m_lastTagPoint[tagId] = pos;
+            QPoint last = m_lastTagPoint[tagId];
+            double alpha = 0.4; // 滤波系数
+            finalPos.setX(last.x() * (1-alpha) + rawPos.x() * alpha);
+            finalPos.setY(last.y() * (1-alpha) + rawPos.y() * alpha);
+
+            // 静止过滤
+            if ((finalPos - last).manhattanLength() < m_spinThreshold->value()) {
+                finalPos = last;
+            }
         }
+
+        m_lastTagPoint[tagId] = finalPos;
+        m_mapWidget->updateTag(tagId, finalPos.x(), finalPos.y());
+
+        // 输出计算日志
+        logMessage(QString("Tag %1 -> (%2, %3) | Used: %4")
+                   .arg(tagId).arg(finalPos.x()).arg(finalPos.y()).arg(usedAnchorsStr));
     } else {
-        statusStr = QString("Tag %1: Positioning Failed (Valid Anchors<3)").arg(tagId);
+        logMessage(QString("Tag %1: Calc Failed").arg(tagId));
     }
-
-    m_tagInfoMap[tagId] = statusStr;
-    updateTagStatusDisplay();
 }
 
-void MainWindow::updateTagStatusDisplay()
-{
-    QString allText;
-    for (auto it = m_tagInfoMap.begin(); it != m_tagInfoMap.end(); ++it) {
-        allText += it.value() + "\n";
-    }
-    m_txtTagInfo->setText(allText);
-}
 
 void MainWindow::onSerialError(QSerialPort::SerialPortError error)
 {
@@ -721,38 +614,124 @@ void MainWindow::onSerialError(QSerialPort::SerialPortError error)
     }
 }
 
+//bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result)
+//{
+//    int n = qMin(anchors.size(), ranges.size());
+//    if (n < 3) return false;
+
+//    struct ValidData { int x, y, r; };
+//    QVector<ValidData> data;
+//    for(int i=0; i<n; ++i) {
+//        if(ranges[i] > 0) data.append({anchors[i].x, anchors[i].y, ranges[i]});
+//    }
+
+//    if(data.size() < 3) return false;
+
+//    double x1 = data[0].x, y1 = data[0].y, r1 = data[0].r;
+//    double x2 = data[1].x, y2 = data[1].y, r2 = data[1].r;
+//    double x3 = data[2].x, y3 = data[2].y, r3 = data[2].r;
+
+//    // 使用 double 避免大距离时的 int 溢出
+//    double A = 2.0 * (x2 - x1);
+//    double B = 2.0 * (y2 - y1);
+//    double C = r1*r1 - r2*r2 - x1*x1 + x2*x2 - y1*y1 + y2*y2;
+
+//    double D = 2.0 * (x3 - x2);
+//    double E = 2.0 * (y3 - y2);
+//    double F = r2*r2 - r3*r3 - x2*x2 + x3*x3 - y2*y2 + y3*y3;
+
+//    double det = A * E - B * D;
+
+//    if (qAbs(det) < 1e-4) {
+//        qDebug() << "Math Error: Anchors are collinear (Singular Matrix)";
+//        return false;
+//    }
+
+//    double x = (C * E - B * F) / det;
+//    double y = (A * F - C * D) / det;
+
+//    result = QPoint(qRound(x), qRound(y));
+//    return true;
+//}
+
+// --------------------------------------------------------
+// 核心算法：线性化最小二乘法 (Linearized Least Squares)
+// 优化：自动选取距离最近的基站作为参考点，减少误差扩散
+// --------------------------------------------------------
 bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result)
 {
     int n = qMin(anchors.size(), ranges.size());
     if (n < 3) return false;
 
-    struct ValidData { int x, y, r; };
-    QVector<ValidData> data;
-    for(int i=0; i<n; ++i) {
-        if(ranges[i] > 0) data.append({anchors[i].x, anchors[i].y, ranges[i]});
+    // 1. 数据预处理与优化：寻找距离最近的基站
+    // 为什么要找最近的？
+    // 因为算法需要选一个点做减法参考。距离越近，通常信号质量越好（Line of Sight），
+    // 把它作为参考点，可以防止把远距离基站的大误差引入到所有方程中。
+
+    QVector<double> X(n), Y(n), R(n);
+    int bestIdx = 0;
+    int minRange = 999999;
+
+    for(int i = 0; i < n; ++i) {
+        X[i] = anchors[i].x;
+        Y[i] = anchors[i].y;
+        R[i] = ranges[i];
+        if (ranges[i] < minRange) {
+            minRange = ranges[i];
+            bestIdx = i;
+        }
     }
 
-    if(data.size() < 3) return false;
+    // 将最佳基站交换到数组末尾，作为参考点 (Xn, Yn)
+    if (bestIdx != n - 1) {
+        std::swap(X[bestIdx], X[n-1]);
+        std::swap(Y[bestIdx], Y[n-1]);
+        std::swap(R[bestIdx], R[n-1]);
+    }
 
-    int x1 = data[0].x, y1 = data[0].y, r1 = data[0].r;
-    int x2 = data[1].x, y2 = data[1].y, r2 = data[1].r;
-    int x3 = data[2].x, y3 = data[2].y, r3 = data[2].r;
+    // 参考点
+    double xn = X[n-1];
+    double yn = Y[n-1];
+    double rn = R[n-1];
 
-    int A = 2 * (x2 - x1);
-    int B = 2 * (y2 - y1);
-    int C = r1*r1 - r2*r2 - x1*x1 + x2*x2 - y1*y1 + y2*y2;
+    // 构建矩阵 A 和向量 b (A*x = b)
+    // 最小二乘解公式: x = (A^T * A)^-1 * (A^T * b)
+    // 这里我们手动展开矩阵乘法，避免引入复杂的矩阵库
 
-    int D = 2 * (x3 - x2);
-    int E = 2 * (y3 - y2);
-    int F = r2*r2 - r3*r3 - x2*x2 + x3*x3 - y2*y2 + y3*y3;
+    double a11 = 0, a12 = 0, a22 = 0; // A^T * A 的元素 (a21 = a12)
+    double b1 = 0, b2 = 0;           // A^T * b 的元素
 
-    int det = A * E - B * D;
+    for (int i = 0; i < n - 1; ++i) {
+        // 原始方程: (x-xi)^2 + (y-yi)^2 = ri^2
+        // 线性化后: 2x(xi - xn) + 2y(yi - yn) = ri^2 - rn^2 - xi^2 + xn^2 - yi^2 + yn^2
 
-    if (qAbs(det) < 1e-6) return false;
+        double Ai_0 = 2.0 * (X[i] - xn);
+        double Ai_1 = 2.0 * (Y[i] - yn);
 
-    int x = (C * E - B * F) / det;
-    int y = (A * F - C * D) / det;
+        double bi_val = rn*rn - R[i]*R[i] + X[i]*X[i] - xn*xn + Y[i]*Y[i] - yn*yn;
 
-    result = QPoint(x, y);
+        // 累加 A^T * A
+        a11 += Ai_0 * Ai_0;
+        a12 += Ai_0 * Ai_1;
+        a22 += Ai_1 * Ai_1;
+
+        // 累加 A^T * b
+        b1 += Ai_0 * bi_val;
+        b2 += Ai_1 * bi_val;
+    }
+
+    // 计算行列式 det
+    double det = a11 * a22 - a12 * a12;
+
+    // 如果行列式接近0，说明基站共线，无解
+    if (qAbs(det) < 1e-4) {
+        return false;
+    }
+
+    // 求解
+    double x = (a22 * b1 - a12 * b2) / det;
+    double y = (a11 * b2 - a12 * b1) / det;
+
+    result = QPoint(qRound(x), qRound(y));
     return true;
 }

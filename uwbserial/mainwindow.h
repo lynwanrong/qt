@@ -36,6 +36,7 @@ public:
     // 更新标签位置
     void updateTag(int id, int x, int y);
     void updateAnchorsMap(const QMap<int, Point> &anchorsMap);
+    QMap<int, Point> getAnchorsMap() const;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -94,6 +95,7 @@ private:
     void loadSettings();
     void saveSettings();
     void updateTagStatusDisplay(); // 刷新文本显示
+    void logMessage(const QString &msg); // 新增：日志输出函数
 
     // 核心算法
     void processJsonData(const QByteArray &data);
@@ -111,18 +113,13 @@ private:
     QDoubleSpinBox *m_spinThreshold;
 
     QLabel *m_lblConnection;     // 仅显示连接状态
-    QTextEdit *m_txtTagInfo;     // 显示多行Tag信息
+    QTextEdit *m_txtLog;
 
     // 数据缓存
     QByteArray m_serialBuffer;
     QSettings *m_settings;
 
-    // 存储每个 Tag 上一次的测距数据 {tag_id: [r0, r1, r2, ...]}
-    QMap<int, QVector<int>> m_lastTagRanges;
     QMap<int, QPoint> m_lastTagPoint;
-
-    // 新增：存储每个 Tag 的状态文本 {tag_id: "Tag 1: (100, 200)"}
-    QMap<int, QString> m_tagInfoMap;
 };
 
 #endif // MAINWINDOW_H
