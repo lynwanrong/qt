@@ -19,15 +19,11 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
-#include <QRegExp> // Qt5.4 使用 QRegExp 处理正则比较方便
+#include <QRegExp>
 #include <QSet>
-#include <algorithm> // 用于 std::sort 或 std::swap
+#include <algorithm>
 #include <QScrollBar>
 
-// ==========================================
-// 调试宏定义
-// ==========================================
-// 注释掉下面这行即可关闭调试打印
 //#define DEBUG_ANCHORS
 
 // ==========================================
@@ -42,7 +38,7 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), m_scale(1.0), m_offsetX
     setAutoFillBackground(true);
     setPalette(pal);
 
-    // 加载基站图片
+    // load anchor png
     m_anchorImage.load(":/anchor.png");
 }
 
@@ -153,7 +149,7 @@ void MapWidget::paintEvent(QPaintEvent *)
 
         painter.setBrush(it.value().color);
         painter.setPen(QPen(Qt::black, 1));
-        painter.drawEllipse(sPos, 8, 8);
+        painter.drawEllipse(sPos, 6, 6);
 
         painter.setPen(it.value().color);
         QString text = QString("T%1 (%2, %3)").arg(it.key()).arg((int)it.value().pos.x).arg((int)it.value().pos.y);
@@ -220,7 +216,7 @@ void MainWindow::initUI()
     controlPanel->setFrameShape(QFrame::StyledPanel);
     QVBoxLayout *controlLayout = new QVBoxLayout(controlPanel);
 
-    // 1. 串口设置
+    // 1. serial set
     QGroupBox *gbSerial = new QGroupBox("Communication Settings", this);
     QVBoxLayout *vboxSerial = new QVBoxLayout(gbSerial);
 
@@ -241,7 +237,7 @@ void MainWindow::initUI()
     vboxSerial->addWidget(m_btnConnect);
     vboxSerial->addWidget(btnConfigTools);
 
-    // 2. 基站配置 (完全动态化)
+    // 2. anchor config
     QGroupBox *gbAnchors = new QGroupBox("Anchor Configuration (ID | X | Y)", this);
     QVBoxLayout *vboxAnchors = new QVBoxLayout(gbAnchors);
 
@@ -281,7 +277,7 @@ void MainWindow::initUI()
     vboxAnchors->addLayout(hboxTableTools);
     vboxAnchors->addWidget(btnApply);
 
-    // 3. 算法设置
+    // 3. Algorithm set
     QGroupBox *gbAlgorithm = new QGroupBox("Optimization", this);
     QVBoxLayout *vboxAlgo = new QVBoxLayout(gbAlgorithm);
 
@@ -295,7 +291,7 @@ void MainWindow::initUI()
     vboxAlgo->addLayout(hboxThreshold);
     gbAlgorithm->setLayout(vboxAlgo);
 
-    // 4. 日志区域 (Log Output) - 替换了旧的显示区域
+    // 4. Log Output
     QGroupBox *gbLog = new QGroupBox("System Log", this);
     QVBoxLayout *vboxLog = new QVBoxLayout(gbLog);
 
@@ -306,7 +302,7 @@ void MainWindow::initUI()
 
     m_txtLog = new QTextEdit(this);
     m_txtLog->setReadOnly(true);
-    // 设置等宽字体，看起来更像终端日志
+
     QFont logFont("Consolas");
     logFont.setStyleHint(QFont::Monospace);
     m_txtLog->setFont(logFont);
@@ -317,7 +313,7 @@ void MainWindow::initUI()
     controlLayout->addWidget(gbSerial);
     controlLayout->addWidget(gbAnchors);
     controlLayout->addWidget(gbAlgorithm);
-    controlLayout->addWidget(gbLog, 1); // Log 区域占据剩余空间
+    controlLayout->addWidget(gbLog, 1);
 
     mainLayout->addWidget(m_mapWidget, 1);
     mainLayout->addWidget(controlPanel);
@@ -327,7 +323,6 @@ void MainWindow::initUI()
 
 void MainWindow::onOpenExternalApp()
 {
-    // 获取当前 A 程序所在的目录
     QString currentDir = QCoreApplication::applicationDirPath();
 
     QString appFileName = "uwbtools.exe";
@@ -335,7 +330,6 @@ void MainWindow::onOpenExternalApp()
 
     QFileInfo bInfo(appPath);
 
-    // 1. 检查文件是否存在
     if (!bInfo.exists() || !bInfo.isFile()) {
         QMessageBox::warning(this, "Error", "Could not find Application B (" + appFileName + ") in:\n" + currentDir);
         return;
@@ -396,11 +390,9 @@ void MainWindow::logMessage(const QString &msg)
     QString timeStr = QDateTime::currentDateTime().toString("[HH:mm:ss.zzz] ");
     m_txtLog->append(timeStr + msg);
 
-    // 自动滚动到底部
     QScrollBar *sb = m_txtLog->verticalScrollBar();
     sb->setValue(sb->maximum());
 
-    // 限制行数防止内存无限增长
     if (m_txtLog->document()->blockCount() > 500) {
         m_txtLog->clear();
         m_txtLog->append("[System] Log cleared (buffer full)");
@@ -416,7 +408,7 @@ void MainWindow::loadSettings()
     double threshold = m_settings->value("distThreshold", 10.0).toDouble();
     m_spinThreshold->setValue(threshold);
 
-    // 加载基站列表
+    // load anchor tables
     int count = m_settings->beginReadArray("Anchors");
     if (count == 0) {
         m_tableAnchors->setRowCount(4);
@@ -443,7 +435,7 @@ void MainWindow::saveSettings()
     m_settings->setValue("lastPort", m_comboPorts->currentText());
     m_settings->setValue("distThreshold", m_spinThreshold->value());
 
-    // 保存基站列表
+    // save anchor tables
     m_settings->beginWriteArray("Anchors");
     for (int i = 0; i < m_tableAnchors->rowCount(); ++i) {
         m_settings->setArrayIndex(i);
@@ -496,8 +488,7 @@ void MainWindow::onSerialReadyRead()
     }
 }
 
-// --------------------------------------------------------
-// 新的解析逻辑：处理 AT 指令格式
+// -------------------------------------------------------- 
 // 示例格式: AT+RANGE=tid:1,mask:80,seq:65,range:(0,0,0,0,0,0,0,107),ancid:(-1,-1,-1,-1,-1,-1,-1,7)
 // --------------------------------------------------------
 void MainWindow::processData(const QByteArray &data)
@@ -506,7 +497,7 @@ void MainWindow::processData(const QByteArray &data)
 //    qDebug() << strData;
     if (!strData.startsWith("AT+RANGE=")) return;
 
-    // 解析 tid
+    // parse tid
     int tagId = -1;
     QRegExp rxId("tid:(\\d+)");
     if (rxId.indexIn(strData) != -1) {
@@ -515,7 +506,7 @@ void MainWindow::processData(const QByteArray &data)
         return;
     }
 
-    // 解析 range 和 ancid
+    // parse range and ancid
     QVector<int> rawRanges;
     QVector<int> aidArr;
 
@@ -535,7 +526,6 @@ void MainWindow::processData(const QByteArray &data)
             if (val.toInt() + 1) aidArr.append(val.toInt());
     }
 
-    // 如果没有数据或长度不匹配，退出
     if ((aidArr.size() != rawRanges.size()) || (aidArr.size() < 3)) {
         qDebug() << "value data < 3";
         return;
@@ -557,7 +547,7 @@ void MainWindow::processData(const QByteArray &data)
     qDebug() << "Configured Anchors in UI:" << knownStr;
     #endif
 
-    // 匹配有效基站
+    //
     QMap<int, MapWidget::Point> mapAnchors = m_mapWidget->getAnchorsMap();
     QVector<MapWidget::Point> validPoints;
     QVector<int> validRanges;
@@ -580,15 +570,13 @@ void MainWindow::processData(const QByteArray &data)
     QPoint rawPos;
     if (calculatePosition(validPoints, validRanges, rawPos)) {
 
-        // 简单的平滑滤波
         QPoint finalPos = rawPos;
         if (m_lastTagPoint.contains(tagId)) {
             QPoint last = m_lastTagPoint[tagId];
-            double alpha = 0.4; // 滤波系数
+            double alpha = 0.2; // 滤波系数
             finalPos.setX(last.x() * (1-alpha) + rawPos.x() * alpha);
             finalPos.setY(last.y() * (1-alpha) + rawPos.y() * alpha);
 
-            // 静止过滤
             if ((finalPos - last).manhattanLength() < m_spinThreshold->value()) {
                 finalPos = last;
             }
@@ -597,7 +585,6 @@ void MainWindow::processData(const QByteArray &data)
         m_lastTagPoint[tagId] = finalPos;
         m_mapWidget->updateTag(tagId, finalPos.x(), finalPos.y());
 
-        // 输出计算日志
         logMessage(QString("Tag %1 -> (%2, %3) | Used: %4")
                    .arg(tagId).arg(finalPos.x()).arg(finalPos.y()).arg(usedAnchorsStr));
     } else {
@@ -614,59 +601,12 @@ void MainWindow::onSerialError(QSerialPort::SerialPortError error)
     }
 }
 
-//bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result)
-//{
-//    int n = qMin(anchors.size(), ranges.size());
-//    if (n < 3) return false;
 
-//    struct ValidData { int x, y, r; };
-//    QVector<ValidData> data;
-//    for(int i=0; i<n; ++i) {
-//        if(ranges[i] > 0) data.append({anchors[i].x, anchors[i].y, ranges[i]});
-//    }
 
-//    if(data.size() < 3) return false;
-
-//    double x1 = data[0].x, y1 = data[0].y, r1 = data[0].r;
-//    double x2 = data[1].x, y2 = data[1].y, r2 = data[1].r;
-//    double x3 = data[2].x, y3 = data[2].y, r3 = data[2].r;
-
-//    // 使用 double 避免大距离时的 int 溢出
-//    double A = 2.0 * (x2 - x1);
-//    double B = 2.0 * (y2 - y1);
-//    double C = r1*r1 - r2*r2 - x1*x1 + x2*x2 - y1*y1 + y2*y2;
-
-//    double D = 2.0 * (x3 - x2);
-//    double E = 2.0 * (y3 - y2);
-//    double F = r2*r2 - r3*r3 - x2*x2 + x3*x3 - y2*y2 + y3*y3;
-
-//    double det = A * E - B * D;
-
-//    if (qAbs(det) < 1e-4) {
-//        qDebug() << "Math Error: Anchors are collinear (Singular Matrix)";
-//        return false;
-//    }
-
-//    double x = (C * E - B * F) / det;
-//    double y = (A * F - C * D) / det;
-
-//    result = QPoint(qRound(x), qRound(y));
-//    return true;
-//}
-
-// --------------------------------------------------------
-// 核心算法：线性化最小二乘法 (Linearized Least Squares)
-// 优化：自动选取距离最近的基站作为参考点，减少误差扩散
-// --------------------------------------------------------
 bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, const QVector<int> &ranges, QPoint &result)
 {
     int n = qMin(anchors.size(), ranges.size());
     if (n < 3) return false;
-
-    // 1. 数据预处理与优化：寻找距离最近的基站
-    // 为什么要找最近的？
-    // 因为算法需要选一个点做减法参考。距离越近，通常信号质量越好（Line of Sight），
-    // 把它作为参考点，可以防止把远距离基站的大误差引入到所有方程中。
 
     QVector<double> X(n), Y(n), R(n);
     int bestIdx = 0;
@@ -676,59 +616,36 @@ bool MainWindow::calculatePosition(const QVector<MapWidget::Point> &anchors, con
         X[i] = anchors[i].x;
         Y[i] = anchors[i].y;
         R[i] = ranges[i];
-        if (ranges[i] < minRange) {
+        if (ranges[i] < minRange && ranges[i] > 0) {
             minRange = ranges[i];
             bestIdx = i;
         }
     }
 
-    // 将最佳基站交换到数组末尾，作为参考点 (Xn, Yn)
     if (bestIdx != n - 1) {
         std::swap(X[bestIdx], X[n-1]);
         std::swap(Y[bestIdx], Y[n-1]);
         std::swap(R[bestIdx], R[n-1]);
     }
 
-    // 参考点
-    double xn = X[n-1];
-    double yn = Y[n-1];
-    double rn = R[n-1];
-
-    // 构建矩阵 A 和向量 b (A*x = b)
-    // 最小二乘解公式: x = (A^T * A)^-1 * (A^T * b)
-    // 这里我们手动展开矩阵乘法，避免引入复杂的矩阵库
-
-    double a11 = 0, a12 = 0, a22 = 0; // A^T * A 的元素 (a21 = a12)
-    double b1 = 0, b2 = 0;           // A^T * b 的元素
+    double xn = X[n-1], yn = Y[n-1], rn = R[n-1];
+    double a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0;
 
     for (int i = 0; i < n - 1; ++i) {
-        // 原始方程: (x-xi)^2 + (y-yi)^2 = ri^2
-        // 线性化后: 2x(xi - xn) + 2y(yi - yn) = ri^2 - rn^2 - xi^2 + xn^2 - yi^2 + yn^2
-
         double Ai_0 = 2.0 * (X[i] - xn);
         double Ai_1 = 2.0 * (Y[i] - yn);
-
         double bi_val = rn*rn - R[i]*R[i] + X[i]*X[i] - xn*xn + Y[i]*Y[i] - yn*yn;
 
-        // 累加 A^T * A
         a11 += Ai_0 * Ai_0;
         a12 += Ai_0 * Ai_1;
         a22 += Ai_1 * Ai_1;
-
-        // 累加 A^T * b
         b1 += Ai_0 * bi_val;
         b2 += Ai_1 * bi_val;
     }
 
-    // 计算行列式 det
     double det = a11 * a22 - a12 * a12;
+    if (qAbs(det) < 1e-4) return false;
 
-    // 如果行列式接近0，说明基站共线，无解
-    if (qAbs(det) < 1e-4) {
-        return false;
-    }
-
-    // 求解
     double x = (a22 * b1 - a12 * b2) / det;
     double y = (a11 * b2 - a12 * b1) / det;
 

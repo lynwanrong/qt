@@ -32,7 +32,9 @@ private slots:
     void sendCommand(QString cmd);
 
     // 核心功能
-    void onBtnGetAllParams();   // 新增：一键获取所有参数
+    void onBtnGetAllParams();   // 一键获取所有参数
+    void executeNextCommand();  // 执行队列中的下一条指令
+    void onResponseTimeout();   // 响应超时处理
 
     // 设置指令槽函数
     void onBtnSetCfg();         // AT+SETCFG
@@ -56,10 +58,11 @@ private:
     void setupUi();
     void setupConnections();
     void parseLine(const QString &line); // 解析器
+    bool isResponseForCmd(const QString &line, const QString &cmd); // 检查回复是否匹配当前指令
 
     // UI 组件指针
     QWidget *centralWidget;
-    QVBoxLayout *mainLayout; // 改为垂直布局作为主框架
+    QVBoxLayout *mainLayout;
 
     // --- 1. 串口控制区 ---
     QGroupBox *groupSerial;
@@ -68,7 +71,7 @@ private:
     QPushButton *btnOpenClose;
     QPushButton *btnRefresh;
 
-    // --- 2. 左侧：状态看板 (显示专用) ---
+    // --- 2. 左侧：状态看板 ---
     QLineEdit *dispVersion;
     QLineEdit *dispDevId;
     QLineEdit *dispRole;
@@ -77,12 +80,11 @@ private:
     QLineEdit *dispPanId;
     QLineEdit *dispAntDelay;
     QLineEdit *dispPower;
-    QLineEdit *dispCapacity; // 显示标签数/槽时间/模式
+    QLineEdit *dispCapacity;
     QLineEdit *dispRptStatus;
-    QPushButton *btnGetAll; // 一键获取按钮
+    QPushButton *btnGetAll;
 
-    // --- 3. 右侧：配置面板 (输入专用) ---
-    // 基础配置
+    // --- 3. 右侧：配置面板 ---
     QLineEdit *inputDevId;
     QComboBox *inputRole;
     QComboBox *inputRate;
@@ -92,20 +94,17 @@ private:
     QLineEdit *inputPanId;
     QPushButton *btnSetPan;
 
-    // 射频配置
     QLineEdit *inputAntDelay;
     QPushButton *btnSetAnt;
 
     QLineEdit *inputPower;
     QPushButton *btnSetPow;
 
-    // 容量配置
     QLineEdit *inputTagCount;
     QLineEdit *inputSlotTime;
     QComboBox *inputExtMode;
     QPushButton *btnSetCap;
 
-    // 运行控制
     QCheckBox *inputAutoRpt;
     QPushButton *btnSetRpt;
 
@@ -130,6 +129,13 @@ private:
     // 逻辑变量
     QSerialPort *serial;
     QByteArray m_buffer;
+
+    // --- 健壮的指令队列管理 ---
+    QTimer *m_responseTimer;     // 超时定时器
+    QStringList m_cmdQueue;      // 待发送指令队列
+    QString m_currentCmd;        // 当前正在等待回复的指令
+    int m_retryCount;            // 当前指令已重试次数
+    const int MAX_RETRIES = 3;   // 最大重试次数
 };
 
 #endif // MAINWINDOW_H

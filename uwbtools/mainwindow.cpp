@@ -10,6 +10,8 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , serial(new QSerialPort(this))
+    , m_responseTimer(new QTimer(this))
+    , m_retryCount(0)
 {
     setupUi();
     setupConnections();
@@ -248,6 +250,9 @@ void MainWindow::setupConnections()
 
     // 一键获取 (Read)
     connect(btnGetAll, &QPushButton::clicked, this, &MainWindow::onBtnGetAllParams);
+
+    // 队列定时器
+    connect(m_responseTimer, &QTimer::timeout, this, &MainWindow::onResponseTimeout);
 }
 
 // ==========================================================
@@ -271,6 +276,10 @@ void MainWindow::toggleSerialPort()
         comboPort->setEnabled(true);
         comboBaud->setEnabled(true);
         btnRefresh->setEnabled(true);
+        // 关闭时也停止正在进行的队列
+        m_responseTimer->stop();
+        m_cmdQueue.clear();
+        m_currentCmd.clear();
     } else {
         serial->setPortName(comboPort->currentText());
         serial->setBaudRate(comboBaud->currentText().toInt());
@@ -320,8 +329,32 @@ void MainWindow::readSerialData()
     }
 }
 
+// 辅助函数：判断 line 是否是对 cmd 的回复
+bool MainWindow::isResponseForCmd(const QString &line, const QString &cmd)
+{
+    if (cmd.contains("GETVER")) return line.contains("GETVER") || line.contains("software");
+    if (cmd.contains("GETCFG")) return line.contains("GETCFG");
+    if (cmd.contains("GETPAN")) return line.contains("GETPAN") || (line.contains("PAN=") && !line.contains("SETPAN"));
+    if (cmd.contains("GETANT")) return line.contains("GETANT");
+    if (cmd.contains("GETPOW")) return line.contains("GETPOW");
+    if (cmd.contains("GETCAP")) return line.contains("GETCAP");
+    if (cmd.contains("GETRPT")) return line.contains("GETRPT");
+    return false;
+}
+
 void MainWindow::parseLine(const QString &line)
 {
+    // --- 0. 检查是否是当前等待指令的回复 ---
+    if (!m_currentCmd.isEmpty() && isResponseForCmd(line, m_currentCmd)) {
+        // 收到正确回复，停止超时计时，准备执行下一条
+        m_responseTimer->stop();
+        m_currentCmd.clear();
+        // 稍微延迟一点点再发下一条，避免粘包风险，虽然有Stop-Wait机制已经很稳了
+        QTimer::singleShot(50, this, &MainWindow::executeNextCommand);
+    }
+
+    // --- 以下是原本的解析逻辑 ---
+
     // 1. 版本: AT+GETVER=software:v...,hardware:v...
     if (line.contains("GETVER=") || line.contains("software:")) {
         int idx = line.indexOf("=");
@@ -423,6 +456,10 @@ void MainWindow::handleError(QSerialPort::SerialPortError error)
         comboPort->setEnabled(true);
         comboBaud->setEnabled(true);
         btnRefresh->setEnabled(true);
+        // 出错时停止队列
+        m_responseTimer->stop();
+        m_cmdQueue.clear();
+        m_currentCmd.clear();
     }
 }
 
@@ -441,7 +478,7 @@ void MainWindow::sendCommand(QString cmd)
     textLog->moveCursor(QTextCursor::End);
 }
 
-// --- 核心功能实现 ---
+// --- 核心功能实现：自动重发队列 ---
 
 // 一键获取所有参数
 void MainWindow::onBtnGetAllParams()
@@ -450,16 +487,87 @@ void MainWindow::onBtnGetAllParams()
         QMessageBox::warning(this, "Info", "Please open serial port");
         return;
     }
-    // 依次发送所有查询指令
-    // UWB模块通常处理速度很快，如果出现粘包，可以考虑增加延时，
-    // 但根据手册AT机制，通常直接发送即可。
-    sendCommand("AT+GETVER?");
-    sendCommand("AT+GETCFG?");
-    sendCommand("AT+GETPAN?");
-    sendCommand("AT+GETANT?");
-    sendCommand("AT+GETPOW?");
-    sendCommand("AT+GETCAP?");
-    sendCommand("AT+GETRPT?");
+
+    // 1. 清空旧显示
+    dispVersion->clear();
+    dispDevId->clear();
+    dispRole->clear();
+    dispRate->clear();
+    dispFilter->clear();
+    dispPanId->clear();
+    dispAntDelay->clear();
+    dispPower->clear();
+    dispCapacity->clear();
+    dispRptStatus->clear();
+
+    // 2. 清空接收区和队列状态
+    serial->clear(QSerialPort::AllDirections);
+    m_cmdQueue.clear();
+    m_currentCmd.clear();
+    m_responseTimer->stop();
+
+    // 3. 填充队列
+    m_cmdQueue << "AT+GETVER?"
+               << "AT+GETCFG?"
+               << "AT+GETPAN?"
+               << "AT+GETANT?"
+               << "AT+GETPOW?"
+               << "AT+GETCAP?"
+               << "AT+GETRPT?";
+
+    // 4. 启动执行
+    executeNextCommand();
+}
+
+// 执行队列中的下一条
+void MainWindow::executeNextCommand()
+{
+    if (m_cmdQueue.isEmpty()) {
+        // 队列执行完毕
+        return;
+    }
+
+    // 取出第一条指令
+    m_currentCmd = m_cmdQueue.takeFirst();
+    m_retryCount = 0; // 重置重试次数
+
+    // 发送
+    sendCommand(m_currentCmd);
+
+    // 启动超时定时器 (500ms)
+    // 如果500ms内没有收到对应的 parseLine 匹配，就会触发 onResponseTimeout
+    m_responseTimer->start(100);
+}
+
+// 超时处理：重试机制
+void MainWindow::onResponseTimeout()
+{
+    if (m_retryCount < MAX_RETRIES) {
+        // 还有重试机会，再发一次
+        m_retryCount++;
+        QString logMsg = QString("[Timeout] Retrying %1 (%2/%3)...")
+                             .arg(m_currentCmd)
+                             .arg(m_retryCount)
+                             .arg(MAX_RETRIES);
+
+        textLog->moveCursor(QTextCursor::End);
+        textLog->setTextColor(QColor("#ef6c00")); // Orange for warning
+        textLog->insertPlainText(logMsg + "\n");
+        textLog->moveCursor(QTextCursor::End);
+
+        sendCommand(m_currentCmd);
+        m_responseTimer->start(500); // 重新计时
+    } else {
+        // 重试耗尽，放弃这条指令，执行下一条
+        QString errMsg = QString("[Error] Give up on %1 after %2 retries.").arg(m_currentCmd).arg(MAX_RETRIES);
+        textLog->moveCursor(QTextCursor::End);
+        textLog->setTextColor(QColor("#d32f2f")); // Red for error
+        textLog->insertPlainText(errMsg + "\n");
+        textLog->moveCursor(QTextCursor::End);
+
+        m_currentCmd.clear();
+        executeNextCommand();
+    }
 }
 
 void MainWindow::onBtnSetCfg() {
@@ -469,8 +577,6 @@ void MainWindow::onBtnSetCfg() {
         .arg(inputRate->currentData().toInt())
         .arg(inputFilter->isChecked() ? 1 : 0);
     sendCommand(cmd);
-    // 设置后建议自动查询一次以更新状态
-    // QTimer::singleShot(200, this, [=](){ sendCommand("AT+GETCFG?"); });
 }
 
 void MainWindow::onBtnSetPan() {
